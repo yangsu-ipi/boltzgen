@@ -66,6 +66,27 @@ class FoldingWriter(BasePredictionWriter):
             # check object is tensor
             if key in const.eval_keys:
                 pred_dict[key] = value.cpu().numpy()
+        
+        # for key in ["pae", "asym_id", "design_mask", "chain_design_mask", "plddt"]:
+        #     pred_dict[key] = prediction[key].cpu().numpy()
+
+        # for key, value in prediction.items():
+        #     if (key not in pred_dict) and isinstance(value, torch.Tensor):
+        #         pred_dict[key] = value.cpu().numpy()
+
+        asym_ids_list = torch.unique(prediction["asym_id"]).tolist()
+        pred_dict["pair_chains_iptm"] = np.array([
+            prediction["pair_chains_iptm"][idx1][idx2].cpu().numpy()
+            for idx1 in asym_ids_list
+            for idx2 in asym_ids_list
+        ]).reshape(len(asym_ids_list), len(asym_ids_list), -1)
+        pred_dict["chain_pair_ipsae"] = np.array([
+            prediction["chain_pair_ipsae"][idx1][idx2].cpu().numpy() if idx1 != idx2
+            else np.zeros(prediction["ptm"].shape)
+            for idx1 in asym_ids_list
+            for idx2 in asym_ids_list
+        ]).reshape(len(asym_ids_list), len(asym_ids_list), -1)
+        
         np.savez_compressed(self.outdir / f"{batch['id'][0]}.npz", **pred_dict)
 
         # Get best sample

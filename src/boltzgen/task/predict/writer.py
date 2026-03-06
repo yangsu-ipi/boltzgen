@@ -67,8 +67,8 @@ class FoldingWriter(BasePredictionWriter):
             if key in const.eval_keys:
                 pred_dict[key] = value.cpu().numpy()
         
-        # for key in ["pae", "asym_id", "design_mask", "chain_design_mask", "plddt"]:
-        #     pred_dict[key] = prediction[key].cpu().numpy()
+        for key in ["asym_id", "design_mask", "chain_design_mask", "pae", "plddt"]:
+            pred_dict[key] = prediction[key].cpu().numpy()
 
         # for key, value in prediction.items():
         #     if (key not in pred_dict) and isinstance(value, torch.Tensor):

@@ -314,6 +314,59 @@ constraints:
 
 ```
 
+## Per-position amino acid constraints
+
+For designed protein chains you can restrict which amino acids may appear at
+individual positions with `residue_constraints`. Each entry takes a `position`
+(a single 1-indexed position or a range like `3..5`) and either `allowed`
+(a whitelist) or `disallowed` (a blacklist), given as one-letter codes
+(`"AGS"` or `[A, G, S]`) or three-letter codes (`[ALA, GLY, SER]`).
+
+Constraints are **hard** by default: the residue simply cannot be sampled.
+Adding a positive `weight` turns an entry into a **soft** preference that biases
+sampling without forbidding anything — useful when a position is not critical
+and you only want to nudge it.
+
+```yaml
+entities:
+  - protein:
+      id: A
+      sequence: 60
+      residue_constraints:
+        # Hard: this position is catalytic, it must be a histidine
+        - position: 10
+          allowed: H
+
+        # Hard: no cysteines anywhere in the loop, no exceptions
+        - position: 20..28
+          disallowed: C
+
+        # Soft: prefer small residues in this stretch, but allow others
+        - position: 30..45
+          allowed: AGS
+          weight: 1.0
+
+        # Soft: methionine is tolerated here, just discouraged
+        - position: 46..60
+          disallowed: M
+          weight: 2.0
+```
+
+Notes:
+
+- `weight` is expressed in log-odds of the sampled distribution: a weight of
+  `2.0` makes that amino acid about e² ≈ 7.4x less likely at that position than
+  it would otherwise be, independent of the sampling temperature. Values around
+  `0.5`–`1.0` nudge, values above `~4` are nearly hard in practice.
+- Constraints are applied during the inverse folding step, so they only take
+  effect if inverse folding runs, and only at designed positions.
+- Overlapping hard constraints intersect (only amino acids allowed by all of
+  them survive); overlapping soft constraints add up.
+- Hard constraints always win over soft ones at the same position, and the
+  global `--inverse_fold_avoid` always wins over both.
+- For symmetric complexes, tied positions are sampled once and the constraints
+  of every tied position are combined, so make sure they are compatible.
+
 ## Symmetric complex design (inverse-folding only)
 
 For symmetric complexes (e.g., homo-dimers), the you can tie sequence generation during inverse folding by specifying the `symmetric_group` for each symmetric chain. The `protein-redesign` protocol allows for scoring complexes without separate binders/targets.

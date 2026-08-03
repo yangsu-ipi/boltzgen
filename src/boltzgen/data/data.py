@@ -1932,6 +1932,7 @@ class DesignInfo(NumpySerializable):
     res_ss_types: npt.NDArray[np.int_]
     res_binding_type: npt.NDArray[np.int_]
     res_aa_constraint_mask: npt.NDArray[np.float32]  # Shape: (num_residues, 20), 0=allowed, 1=disallowed
+    res_aa_soft_bias: npt.NDArray[np.float32]  # Shape: (num_residues, 20), additive logit bias, 0=neutral
 
     @classmethod
     def is_valid(self, info: "DesignInfo") -> bool:
@@ -1942,6 +1943,7 @@ class DesignInfo(NumpySerializable):
             and len(info.res_structure_groups) == len(info.res_ss_types)
             and len(info.res_ss_types) == len(info.res_binding_type)
             and len(info.res_aa_constraint_mask) == len(info.res_design_mask)
+            and len(info.res_aa_soft_bias) == len(info.res_design_mask)
         ), (
             "There must be a bug in the code. All residue level design info objects should have the same length."
         )
@@ -1959,7 +1961,9 @@ class DesignInfo(NumpySerializable):
             raise ValueError(msg)
 
         # Validate residue constraints
-        has_constraints = info.res_aa_constraint_mask.any(axis=1)
+        has_constraints = (info.res_aa_constraint_mask != 0).any(axis=1) | (
+            info.res_aa_soft_bias != 0
+        ).any(axis=1)
         if any(has_constraints & ~info.res_design_mask.astype(bool)):
             warnings.warn(
                 "Residue constraints specified for non-designed residues "
@@ -1968,8 +1972,10 @@ class DesignInfo(NumpySerializable):
                 stacklevel=2,
             )
 
-        # Check if any designed position has ALL amino acids blocked
-        all_blocked = info.res_aa_constraint_mask.all(axis=1)
+        # Check if any designed position has ALL amino acids hard-blocked.
+        # Soft constraints are deliberately excluded: they only bias the logits
+        # and can never make a position unsatisfiable.
+        all_blocked = (info.res_aa_constraint_mask != 0).all(axis=1)
         if any(all_blocked & info.res_design_mask.astype(bool)):
             msg = "Invalid residue constraints: some designed positions have all amino acids disallowed."
             raise ValueError(msg)
@@ -2069,6 +2075,7 @@ Token = [
     ("binding_type", np.dtype("i4")),
     ("structure_group", np.dtype("i4")),
     ("aa_constraint_mask", np.dtype("20f4")),  # Per-residue AA constraints: 20 floats (one per canonical AA)
+    ("aa_soft_bias", np.dtype("20f4")),  # Per-residue soft AA logit bias: 20 floats (one per canonical AA)
     ("ccd", np.dtype("5i4")),
     ("target_msa_mask", np.dtype("?")),
     ("design_ss_mask", np.dtype("?")),

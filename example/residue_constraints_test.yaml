@@ -10,11 +10,16 @@
 #
 # Note: Supports both string format ("AGS") and list format ([A, G, S])
 #       String format is preferred for consistency with sequence/binding_types
+#
+# Note: A constraint is hard (strictly enforced) unless it carries a positive
+#       'weight', which turns it into a soft preference of that strength in
+#       log-odds. Soft constraints bias sampling but never forbid a residue,
+#       so they cannot be verified from a single design.
 
 entities:
   - protein:
       id: A
-      sequence: 10
+      sequence: 14
       residue_constraints:
         # Position 1: Force Alanine only
         - position: 1
@@ -31,3 +36,20 @@ entities:
         # Position 10: Force Proline
         - position: 10
           allowed: P
+
+        # Positions 11-12: Softly prefer small amino acids (others still possible)
+        - position: 11..12
+          allowed: AGS
+          weight: 1.0
+
+        # Position 13: Strongly discourage Tryptophan without forbidding it
+        - position: 13
+          disallowed: W
+          weight: 3.0
+
+        # Position 14: Hard block on Cysteine plus a soft dislike of Methionine
+        - position: 14
+          disallowed: C
+        - position: 14
+          disallowed: M
+          weight: 1.5

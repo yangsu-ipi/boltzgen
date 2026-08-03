@@ -108,6 +108,99 @@ def build_constraint_logit_mask(
     return combined_blocked.to(dtype=torch.float32) * (-inf)
 
 
+def build_soft_logit_bias(
+    num_nodes: int,
+    aa_soft_bias: Optional[Tensor],
+    canonical_tokens: list[str],
+    device: torch.device,
+    sampling_temperature: Optional[float] = None,
+) -> Tensor:
+    """Build per-position soft inverse-folding logit bias.
+
+    Unlike :func:`build_constraint_logit_mask`, the returned bias is finite:
+    0.0 is neutral and negative values discourage an amino acid without ever
+    making it impossible to sample.
+
+    Soft biases are specified in log-odds of the *final* sampling distribution,
+    while they are applied to the logits before those are divided by the
+    sampling temperature. Pre-multiplying by the temperature therefore makes the
+    requested strength independent of it: a bias of -2.0 lowers the sampled
+    log-odds of that amino acid by 2.0 at any temperature. When
+    ``sampling_temperature`` is None (argmax decoding) the bias is used as-is,
+    in raw logit units.
+    """
+    num_aa = len(canonical_tokens)
+    zeros = torch.zeros(num_nodes, num_aa, dtype=torch.float32, device=device)
+
+    if aa_soft_bias is None:
+        return zeros
+
+    expected_shape = (num_nodes, num_aa)
+    if aa_soft_bias.shape != expected_shape:
+        warnings.warn(
+            f"aa_soft_bias shape mismatch: "
+            f"got {aa_soft_bias.shape}, expected {expected_shape}. "
+            f"Ignoring per-residue soft constraints.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return zeros
+
+    bias = aa_soft_bias.to(device=device, dtype=torch.float32)
+
+    # Soft constraints must stay finite: an infinite bias would bypass the
+    # "at least one amino acid remains available" guarantee of the hard mask.
+    if not torch.isfinite(bias).all():
+        warnings.warn(
+            "aa_soft_bias contains non-finite values, which are not valid for "
+            "soft constraints. Replacing them with 0.0. Use a hard constraint "
+            "(a residue_constraints entry without 'weight') to forbid a residue.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        bias = torch.nan_to_num(bias, nan=0.0, posinf=0.0, neginf=0.0)
+
+    if sampling_temperature is not None and sampling_temperature > 0:
+        bias = bias * sampling_temperature
+
+    return bias
+
+
+def aggregate_tied_constraints(
+    per_residue_mask: Tensor,
+    per_residue_soft_bias: Tensor,
+    positions: List[int],
+) -> Tuple[Tensor, Tensor]:
+    """Combine per-position constraints across sequence-tied positions.
+
+    Tied positions (e.g. copies of a chain in a homomer) are sampled once, so
+    their constraints must be merged: an amino acid is blocked when it is
+    blocked at ANY tied position, and soft biases are averaged to match the
+    averaging of the logits across the group.
+
+    Returns
+    -------
+    Tuple[Tensor, Tensor]
+        The hard mask and the soft bias for the group, each of shape (1, num_aa).
+    """
+    idx = torch.as_tensor(positions, device=per_residue_mask.device)
+
+    hard = per_residue_mask[idx].amin(dim=0, keepdim=True)
+    if bool((hard != 0).all()):
+        warnings.warn(
+            f"Tied positions {list(positions)} have per-residue constraints that "
+            f"together block every amino acid. Falling back to the constraints of "
+            f"position {positions[0]} for this group.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        hard = per_residue_mask[positions[0]][None]
+
+    soft = per_residue_soft_bias[idx].mean(dim=0, keepdim=True)
+
+    return hard, soft
+
+
 class MLPAttnGNN(nn.Module):
     def __init__(
         self,
@@ -670,6 +763,17 @@ class InverseFoldingDecoder(nn.Module):
             device=s.device,
         )
 
+        soft_bias_feat = None
+        if "aa_soft_bias" in feats:
+            soft_bias_feat = feats["aa_soft_bias"][valid_mask]
+        per_residue_soft_bias = build_soft_logit_bias(
+            num_nodes=num_nodes,
+            aa_soft_bias=soft_bias_feat,
+            canonical_tokens=const.canonical_tokens,
+            device=s.device,
+            sampling_temperature=self.sampling_temperature,
+        )
+
         order = torch.randperm(num_nodes, device=s.device).cpu().numpy().tolist()
         # Non-design residues are not sampled and used as the condition. So the order should filter them out.
         if num_not_design > 0:
@@ -695,6 +799,15 @@ class InverseFoldingDecoder(nn.Module):
             sym_groups, position_to_group = {}, {}
             sampled = set()
 
+        # Tied positions share a single sampled residue, so their constraints
+        # have to be combined once up front.
+        group_constraints = {
+            group_id: aggregate_tied_constraints(
+                per_residue_mask, per_residue_soft_bias, group_positions
+            )
+            for group_id, group_positions in sym_groups.items()
+        }
+
         src_idx, dst_idx = edge_idx[0], edge_idx[1]
 
         # decoding in order
@@ -705,9 +818,13 @@ class InverseFoldingDecoder(nn.Module):
 
             # Get symmetric positions (or just [i] if no symmetry)
             if self.tie_symmetric_sequences and i in position_to_group:
-                positions = sym_groups[position_to_group[i]]
+                group_id = position_to_group[i]
+                positions = sym_groups[group_id]
+                hard_mask, soft_bias = group_constraints[group_id]
             else:
                 positions = [i]
+                hard_mask = per_residue_mask[i : i + 1]
+                soft_bias = per_residue_soft_bias[i : i + 1]
 
             # Aggregate logits from all symmetric positions
             aggregated_logits = None
@@ -740,7 +857,8 @@ class InverseFoldingDecoder(nn.Module):
                     const.canonicals_offset : len(const.canonical_tokens)
                     + const.canonicals_offset,
                 ]
-                + per_residue_mask[i : i + 1]  # Position-specific mask
+                + hard_mask  # Position-specific hard constraints
+                + soft_bias  # Position-specific soft constraints
             )
             if self.sampling_temperature is None:
                 ids_canonical = torch.argmax(pred_canonical, dim=-1)

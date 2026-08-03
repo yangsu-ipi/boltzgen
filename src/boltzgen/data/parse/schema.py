@@ -764,13 +764,72 @@ def _convert_aa_names_to_indices(
     return indices
 
 
+def _apply_residue_constraint(
+    constraint_mask: np.ndarray,
+    soft_bias: np.ndarray,
+    positions: list[int],
+    aa_indices: list[int],
+    is_whitelist: bool,
+    weight: Optional[float],
+) -> None:
+    """Apply one parsed residue constraint in place.
+
+    A ``weight`` of None makes the constraint hard (written into
+    ``constraint_mask``); otherwise it becomes a soft additive logit penalty of
+    that magnitude (written into ``soft_bias``).
+    """
+    num_aa = constraint_mask.shape[1]
+
+    if is_whitelist:
+        # Everything outside the allowed set is blocked / penalised.
+        row = np.ones(num_aa, dtype=np.float32)
+        for idx in aa_indices:
+            row[idx] = 0.0
+        for pos in positions:
+            if weight is None:
+                # np.maximum accumulates with existing constraints (intersection
+                # semantics): if a position already has constraints, only amino
+                # acids allowed by BOTH survive.
+                constraint_mask[pos, :] = np.maximum(constraint_mask[pos, :], row)
+            else:
+                soft_bias[pos, :] -= weight * row
+    else:
+        # Only the listed amino acids are blocked / penalised.
+        for pos in positions:
+            for idx in aa_indices:
+                if weight is None:
+                    constraint_mask[pos, idx] = 1.0
+                else:
+                    soft_bias[pos, idx] -= weight
+
+
+def _parse_constraint_weight(weight: object, position_spec: object) -> float:
+    """Validate a soft-constraint ``weight`` and return it as a float."""
+    if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+        raise ValueError(
+            f"Position {position_spec}: 'weight' must be a number, got {weight!r}"
+        )
+    weight = float(weight)
+    if not np.isfinite(weight):
+        raise ValueError(
+            f"Position {position_spec}: 'weight' must be finite. "
+            f"Omit 'weight' to make the constraint hard."
+        )
+    if weight <= 0:
+        raise ValueError(
+            f"Position {position_spec}: 'weight' must be positive, got {weight}. "
+            f"Omit 'weight' to make the constraint hard."
+        )
+    return weight
+
+
 def parse_residue_constraints(
     constraints_spec: list,
     chain_length: int,
     canonical_tokens: list[str],
     prot_letter_to_token: dict[str, str],
-) -> np.ndarray:
-    """Parse residue_constraints into a per-residue constraint mask.
+) -> tuple[np.ndarray, np.ndarray]:
+    """Parse residue_constraints into per-residue hard and soft constraints.
 
     Parameters
     ----------
@@ -785,21 +844,35 @@ def parse_residue_constraints(
 
     Returns
     -------
-    np.ndarray
-        Shape (chain_length, 20) where:
+    constraint_mask : np.ndarray
+        Shape (chain_length, 20), the **hard** constraints where:
         - 0.0 means allowed
-        - 1.0 means disallowed (will be converted to -inf logit bias in model)
+        - 1.0 means disallowed (converted to a -inf logit bias in the model)
+    soft_bias : np.ndarray
+        Shape (chain_length, 20), the **soft** constraints expressed as an
+        additive logit bias: 0.0 is neutral, negative values discourage an
+        amino acid. Magnitudes are in log-odds units of the final sampling
+        distribution, so -2.0 makes an amino acid ~e^2 (7.4x) less likely
+        than it would otherwise be, but never impossible.
 
     Notes
     -----
-    Overlapping constraints use **intersection** semantics: if multiple
-    constraints cover the same position, only amino acids allowed by ALL
-    of them survive. For example, ``allowed: AG`` at pos 1..10 followed
-    by ``allowed: GS`` at pos 5..15 results in only G being allowed at
-    positions 5-10 (the intersection of {A,G} and {G,S}).
+    A constraint is hard unless it carries a positive ``weight``, in which
+    case it becomes a soft preference of that strength.
+
+    Overlapping *hard* constraints use **intersection** semantics: if
+    multiple constraints cover the same position, only amino acids allowed
+    by ALL of them survive. For example, ``allowed: AG`` at pos 1..10
+    followed by ``allowed: GS`` at pos 5..15 results in only G being
+    allowed at positions 5-10 (the intersection of {A,G} and {G,S}).
+
+    Overlapping *soft* constraints accumulate additively: two soft
+    constraints each penalising CYS by 1.0 at the same position yield a
+    penalty of 2.0 there.
     """
     num_aa = len(canonical_tokens)  # Should be 20
     constraint_mask = np.zeros((chain_length, num_aa), dtype=np.float32)
+    soft_bias = np.zeros((chain_length, num_aa), dtype=np.float32)
 
     for constraint in constraints_spec:
         # Parse position(s)
@@ -832,36 +905,30 @@ def parse_residue_constraints(
                 f"Position {position_spec}: must specify either 'allowed' or 'disallowed'"
             )
 
-        if allowed is not None:
-            # Whitelist mode: block all except specified AAs
-            # Uses np.maximum to accumulate with existing constraints (intersection semantics):
-            # if a position already has constraints, only AAs allowed by BOTH survive.
-            aa_list = _normalize_aa_spec(allowed)
-            if len(aa_list) == 0:
-                raise ValueError(
-                    f"Position {position_spec}: 'allowed' cannot be empty"
-                )
-            aa_indices = _convert_aa_names_to_indices(
-                aa_list, canonical_tokens, prot_letter_to_token
-            )
-            new_block = np.ones(num_aa, dtype=np.float32)
-            for idx in aa_indices:
-                new_block[idx] = 0.0
-            for pos in positions:
-                constraint_mask[pos, :] = np.maximum(constraint_mask[pos, :], new_block)
+        # A constraint without a weight is hard; a positive weight makes it a
+        # soft preference of that strength (in logits).
+        weight = constraint.get("weight", None)
+        if weight is not None:
+            weight = _parse_constraint_weight(weight, position_spec)
 
-        elif disallowed is not None:
-            # Blacklist mode: only block specified
-            # Normalize input: supports both "CM" (string) and [C, M] (list)
-            aa_list = _normalize_aa_spec(disallowed)
-            aa_indices = _convert_aa_names_to_indices(
-                aa_list, canonical_tokens, prot_letter_to_token
-            )
-            for pos in positions:
-                for idx in aa_indices:
-                    constraint_mask[pos, idx] = 1.0  # Block specified
+        # Normalize input: supports both "CM" (string) and [C, M] (list)
+        aa_list = _normalize_aa_spec(allowed if allowed is not None else disallowed)
+        if allowed is not None and len(aa_list) == 0:
+            raise ValueError(f"Position {position_spec}: 'allowed' cannot be empty")
+        aa_indices = _convert_aa_names_to_indices(
+            aa_list, canonical_tokens, prot_letter_to_token
+        )
 
-    return constraint_mask
+        _apply_residue_constraint(
+            constraint_mask=constraint_mask,
+            soft_bias=soft_bias,
+            positions=positions,
+            aa_indices=aa_indices,
+            is_whitelist=allowed is not None,
+            weight=weight,
+        )
+
+    return constraint_mask, soft_bias
 
 
 def parse_entity(item, mols, mol_dir, ligand_id, is_msa_custom, is_msa_auto):
@@ -1151,24 +1218,29 @@ def parse_entity(item, mols, mol_dir, ligand_id, is_msa_custom, is_msa_auto):
     ids = item[entity_type]["id"]
     num_chains = 1 if isinstance(ids, str) else len(ids)
     res_aa_constraint_list = []
+    res_aa_soft_bias_list = []
     for _ in range(num_chains):
         if constraints_spec is not None and entity_type == "protein":
-            res_aa_constraints = parse_residue_constraints(
+            res_aa_constraints, res_aa_soft_bias = parse_residue_constraints(
                 constraints_spec,
                 chain_length=num,
                 canonical_tokens=const.canonical_tokens,
                 prot_letter_to_token=const.prot_letter_to_token,
             )
         else:
-            # No constraints: all 20 amino acids allowed (zeros)
+            # No constraints: all 20 amino acids allowed (zeros), no soft bias
             res_aa_constraints = np.zeros((num, len(const.canonical_tokens)), dtype=np.float32)
+            res_aa_soft_bias = np.zeros((num, len(const.canonical_tokens)), dtype=np.float32)
         res_aa_constraint_list.append(res_aa_constraints)
+        res_aa_soft_bias_list.append(res_aa_soft_bias)
 
     # Concatenate constraint masks for all chain copies
     if res_aa_constraint_list:
         res_aa_constraint_mask = np.concatenate(res_aa_constraint_list, axis=0)
+        res_aa_soft_bias = np.concatenate(res_aa_soft_bias_list, axis=0)
     else:
         res_aa_constraint_mask = np.zeros((0, len(const.canonical_tokens)), dtype=np.float32)
+        res_aa_soft_bias = np.zeros((0, len(const.canonical_tokens)), dtype=np.float32)
 
     # Add as many parsed_chains as provided ids
     if entity_type in {"protein", "dna", "rna", "ligand"}:
@@ -1198,6 +1270,7 @@ def parse_entity(item, mols, mol_dir, ligand_id, is_msa_custom, is_msa_auto):
         fuse_info,
         ligand_id,
         res_aa_constraint_mask,
+        res_aa_soft_bias,
     )
 
 
@@ -1430,6 +1503,7 @@ class YamlDesignParser:
             res_bind_type = np.array([], dtype=np.int32)
             ss_type = np.array([], dtype=np.int32)
             res_aa_constraint_mask = np.zeros((0, len(const.canonical_tokens)), dtype=np.float32)
+            res_aa_soft_bias = np.zeros((0, len(const.canonical_tokens)), dtype=np.float32)
             chain_to_msa = {}
 
             global_asym_id = 0
@@ -1454,6 +1528,7 @@ class YamlDesignParser:
                         fuse_info,
                         ligand_id,
                         new_res_aa_constraint_mask,
+                        new_res_aa_soft_bias,
                     ) = parse_entity(
                         item, mols, mol_dir, ligand_id, is_msa_custom, is_msa_auto
                     )
@@ -1463,6 +1538,7 @@ class YamlDesignParser:
                     res_bind_type = np.concatenate([res_bind_type, new_res_bind_type])
                     ss_type = np.concatenate([ss_type, new_ss_type])
                     res_aa_constraint_mask = np.concatenate([res_aa_constraint_mask, new_res_aa_constraint_mask], axis=0)
+                    res_aa_soft_bias = np.concatenate([res_aa_soft_bias, new_res_aa_soft_bias], axis=0)
                     for asym_id, (chain_name, chain) in enumerate(
                         parsed_chains.items()
                     ):
@@ -1666,9 +1742,10 @@ class YamlDesignParser:
                     res_design_mask = np.concatenate([res_design_mask, new_design_mask])
                     res_bind_type = np.concatenate([res_bind_type, fbind_types])
                     ss_type = np.concatenate([ss_type, fss_type])
-                    # File entities have no residue constraints — pad with zeros (all AAs allowed)
-                    file_constraint_mask = np.zeros((len(new_design_mask), len(const.canonical_tokens)), dtype=np.float32)
-                    res_aa_constraint_mask = np.concatenate([res_aa_constraint_mask, file_constraint_mask], axis=0)
+                    # File entities have no residue constraints — pad with zeros (all AAs allowed, no bias)
+                    file_no_constraints = np.zeros((len(new_design_mask), len(const.canonical_tokens)), dtype=np.float32)
+                    res_aa_constraint_mask = np.concatenate([res_aa_constraint_mask, file_no_constraints], axis=0)
+                    res_aa_soft_bias = np.concatenate([res_aa_soft_bias, file_no_constraints], axis=0)
                     extra_mols.update(new_extra_mols)
                     if len(renaming) > 0:
                         msg = f"\nChain ids conflict with existing chain ids. Renaming with {renaming}. This is for the structure from '{path}'."
@@ -1839,6 +1916,7 @@ class YamlDesignParser:
             res_binding_type=res_bind_type,
             res_ss_types=ss_type,
             res_aa_constraint_mask=res_aa_constraint_mask,
+            res_aa_soft_bias=res_aa_soft_bias,
         )
         DesignInfo.is_valid(design_info)
 

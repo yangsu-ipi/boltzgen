@@ -406,6 +406,10 @@ class DesignWriter(BasePredictionWriter):
                     aa_mask = batch["aa_constraint_mask"][0]
                     if aa_mask.any():  # Only save if there are actual constraints
                         metadata_dict["aa_constraint_mask"] = aa_mask[token_mask].cpu().numpy()
+                if "aa_soft_bias" in batch:
+                    aa_bias = batch["aa_soft_bias"][0]
+                    if aa_bias.any():  # Only save if there are actual soft constraints
+                        metadata_dict["aa_soft_bias"] = aa_bias[token_mask].cpu().numpy()
 
                 np.savez_compressed(metadata_path, **metadata_dict)
 

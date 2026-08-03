@@ -220,6 +220,7 @@ class PredictionDataset(torch.utils.data.Dataset):
         tokenized.tokens["aa_constraint_mask"] = design_info.res_aa_constraint_mask[
             token_to_res
         ]
+        tokenized.tokens["aa_soft_bias"] = design_info.res_aa_soft_bias[token_to_res]
 
         # Propagate design mask to obtain chain_design_mask (True whenever something is covalently bound to any residue that is in a chain that contains a design residue).
         chain_design_mask = tokenized.tokens["design_mask"].astype(bool)

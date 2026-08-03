@@ -32,6 +32,34 @@ class DataFetchException(Exception):
     pass
 
 
+def _load_per_aa_array(metadata, key: str) -> Optional[np.ndarray]:
+    """Load an (N, 20) per-residue amino acid array from NPZ metadata.
+
+    Returns None if the key is absent or the stored value has an
+    unexpected type or shape (in which case a warning is issued).
+    """
+    if key not in metadata:
+        return None
+
+    loaded = metadata[key]
+    if (
+        isinstance(loaded, np.ndarray)
+        and loaded.ndim == 2
+        and loaded.shape[1] == len(const.canonical_tokens)  # 20 canonical amino acids
+    ):
+        return loaded
+
+    warnings.warn(
+        f"Invalid {key} in NPZ: "
+        f"type={type(loaded)}, shape={getattr(loaded, 'shape', 'N/A')}. "
+        f"Expected ndarray with shape (N, {len(const.canonical_tokens)}). "
+        f"Ignoring constraints.",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+    return None
+
+
 @dataclass
 class DataConfig:
     """Data configuration."""
@@ -321,27 +349,18 @@ class FromGeneratedDataset(torch.utils.data.Dataset):
             binding_type = metadata["binding_type"]
 
         # Per-residue amino acid constraints for inverse folding
-        aa_constraint_mask = None
-        if "aa_constraint_mask" in metadata:
-            loaded_mask = metadata["aa_constraint_mask"]
-            # Validate the loaded mask is a proper array with expected shape
-            if (
-                isinstance(loaded_mask, np.ndarray)
-                and loaded_mask.ndim == 2
-                and loaded_mask.shape[1] == 20  # 20 canonical amino acids
-            ):
-                aa_constraint_mask = loaded_mask
-            else:
-                warnings.warn(
-                    f"Invalid aa_constraint_mask in NPZ: "
-                    f"type={type(loaded_mask)}, shape={getattr(loaded_mask, 'shape', 'N/A')}. "
-                    f"Expected ndarray with shape (N, 20). Ignoring constraints.",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
+        aa_constraint_mask = _load_per_aa_array(metadata, "aa_constraint_mask")
+        aa_soft_bias = _load_per_aa_array(metadata, "aa_soft_bias")
 
         # Get features
-        feat = self.get_feat(generated_path, design_mask, ss_type, binding_type, aa_constraint_mask)
+        feat = self.get_feat(
+            generated_path,
+            design_mask,
+            ss_type,
+            binding_type,
+            aa_constraint_mask,
+            aa_soft_bias,
+        )
 
         # Get native features
         if self.return_native:
@@ -355,7 +374,15 @@ class FromGeneratedDataset(torch.utils.data.Dataset):
 
         return feat
 
-    def get_feat(self, path, design_mask, ss_type=None, binding_type=None, aa_constraint_mask=None):
+    def get_feat(
+        self,
+        path,
+        design_mask,
+        ss_type=None,
+        binding_type=None,
+        aa_constraint_mask=None,
+        aa_soft_bias=None,
+    ):
         # Load design
         if self.extra_mol_dir is not None:
             mols = {
@@ -486,6 +513,8 @@ class FromGeneratedDataset(torch.utils.data.Dataset):
         # Per-residue amino acid constraints for inverse folding
         if aa_constraint_mask is not None:
             features["aa_constraint_mask"] = torch.from_numpy(aa_constraint_mask).float()
+        if aa_soft_bias is not None:
+            features["aa_soft_bias"] = torch.from_numpy(aa_soft_bias).float()
 
         # If we do not want the design mask to impact the featurizer (e.g. represent atoms as atom14), we set the design mask only here.
         if not self.design:

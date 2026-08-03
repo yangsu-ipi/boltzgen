@@ -105,13 +105,13 @@ class TestParseResidueConstraintsValid:
     """Tests for parse_residue_constraints with valid YAML specs."""
 
     def test_empty_list_returns_zeros(self):
-        mask = parse_residue_constraints([], 10, CANONICAL, LETTER_MAP)
+        mask, _ = parse_residue_constraints([], 10, CANONICAL, LETTER_MAP)
         assert mask.shape == (10, 20)
         assert mask.sum() == 0.0
 
     def test_single_allowed(self):
         spec = [{"position": 1, "allowed": "A"}]
-        mask = parse_residue_constraints(spec, 5, CANONICAL, LETTER_MAP)
+        mask, _ = parse_residue_constraints(spec, 5, CANONICAL, LETTER_MAP)
         ala_idx = CANONICAL.index("ALA")
         # Position 0 (1-indexed=1): only ALA allowed (0.0), rest blocked (1.0)
         assert mask[0, ala_idx] == 0.0
@@ -121,7 +121,7 @@ class TestParseResidueConstraintsValid:
 
     def test_single_disallowed(self):
         spec = [{"position": 3, "disallowed": "CM"}]
-        mask = parse_residue_constraints(spec, 5, CANONICAL, LETTER_MAP)
+        mask, _ = parse_residue_constraints(spec, 5, CANONICAL, LETTER_MAP)
         cys_idx = CANONICAL.index("CYS")
         met_idx = CANONICAL.index("MET")
         # Position 2 (1-indexed=3): CYS and MET blocked
@@ -131,7 +131,7 @@ class TestParseResidueConstraintsValid:
 
     def test_range_positions(self):
         spec = [{"position": "3..5", "disallowed": "C"}]
-        mask = parse_residue_constraints(spec, 10, CANONICAL, LETTER_MAP)
+        mask, _ = parse_residue_constraints(spec, 10, CANONICAL, LETTER_MAP)
         cys_idx = CANONICAL.index("CYS")
         # Positions 2,3,4 (1-indexed 3,4,5) should have CYS blocked
         for pos in [2, 3, 4]:
@@ -142,7 +142,7 @@ class TestParseResidueConstraintsValid:
 
     def test_allowed_multiple_aas(self):
         spec = [{"position": 8, "allowed": "AGS"}]
-        mask = parse_residue_constraints(spec, 10, CANONICAL, LETTER_MAP)
+        mask, _ = parse_residue_constraints(spec, 10, CANONICAL, LETTER_MAP)
         ala_idx = CANONICAL.index("ALA")
         gly_idx = CANONICAL.index("GLY")
         ser_idx = CANONICAL.index("SER")
@@ -154,7 +154,7 @@ class TestParseResidueConstraintsValid:
 
     def test_list_format_allowed(self):
         spec = [{"position": 1, "allowed": ["A", "G"]}]
-        mask = parse_residue_constraints(spec, 5, CANONICAL, LETTER_MAP)
+        mask, _ = parse_residue_constraints(spec, 5, CANONICAL, LETTER_MAP)
         ala_idx = CANONICAL.index("ALA")
         gly_idx = CANONICAL.index("GLY")
         assert mask[0, ala_idx] == 0.0
@@ -166,7 +166,7 @@ class TestParseResidueConstraintsValid:
             {"position": 1, "allowed": "A"},
             {"position": 5, "allowed": "P"},
         ]
-        mask = parse_residue_constraints(spec, 5, CANONICAL, LETTER_MAP)
+        mask, _ = parse_residue_constraints(spec, 5, CANONICAL, LETTER_MAP)
         ala_idx = CANONICAL.index("ALA")
         pro_idx = CANONICAL.index("PRO")
         assert mask[0, ala_idx] == 0.0
@@ -186,7 +186,7 @@ class TestParseResidueConstraintsValid:
             {"position": 1, "allowed": "AG"},
             {"position": 1, "allowed": "GS"},
         ]
-        mask = parse_residue_constraints(spec, 5, CANONICAL, LETTER_MAP)
+        mask, _ = parse_residue_constraints(spec, 5, CANONICAL, LETTER_MAP)
         gly_idx = CANONICAL.index("GLY")
         ala_idx = CANONICAL.index("ALA")
         ser_idx = CANONICAL.index("SER")
@@ -202,7 +202,7 @@ class TestParseResidueConstraintsValid:
             {"position": "1..5", "allowed": "AG"},
             {"position": "3..7", "allowed": "GS"},
         ]
-        mask = parse_residue_constraints(spec, 10, CANONICAL, LETTER_MAP)
+        mask, _ = parse_residue_constraints(spec, 10, CANONICAL, LETTER_MAP)
         gly_idx = CANONICAL.index("GLY")
         ala_idx = CANONICAL.index("ALA")
         ser_idx = CANONICAL.index("SER")
@@ -227,7 +227,7 @@ class TestParseResidueConstraintsValid:
             {"position": 5, "allowed": "AGILMV"},
             {"position": 5, "disallowed": "CM"},
         ]
-        mask = parse_residue_constraints(spec, 10, CANONICAL, LETTER_MAP)
+        mask, _ = parse_residue_constraints(spec, 10, CANONICAL, LETTER_MAP)
         met_idx = CANONICAL.index("MET")
         ala_idx = CANONICAL.index("ALA")
         # M was in allowed set but then blocked by disallowed
@@ -245,8 +245,8 @@ class TestParseResidueConstraintsValid:
             {"position": 5, "disallowed": "CM"},
             {"position": 5, "allowed": "AGILMV"},
         ]
-        mask_ab = parse_residue_constraints(spec_ab, 10, CANONICAL, LETTER_MAP)
-        mask_ba = parse_residue_constraints(spec_ba, 10, CANONICAL, LETTER_MAP)
+        mask_ab, _ = parse_residue_constraints(spec_ab, 10, CANONICAL, LETTER_MAP)
+        mask_ba, _ = parse_residue_constraints(spec_ba, 10, CANONICAL, LETTER_MAP)
         np.testing.assert_array_equal(mask_ab, mask_ba)
 
     def test_disjoint_allowed_sets_all_blocked(self):
@@ -255,7 +255,7 @@ class TestParseResidueConstraintsValid:
             {"position": 1, "allowed": "AG"},
             {"position": 1, "allowed": "VILM"},
         ]
-        mask = parse_residue_constraints(spec, 5, CANONICAL, LETTER_MAP)
+        mask, _ = parse_residue_constraints(spec, 5, CANONICAL, LETTER_MAP)
         # All 20 blocked at position 0
         assert mask[0].sum() == 20.0
 
@@ -265,7 +265,7 @@ class TestParseResidueConstraintsValid:
             {"position": 1, "disallowed": "CM"},
             {"position": 1, "disallowed": "WK"},
         ]
-        mask = parse_residue_constraints(spec, 5, CANONICAL, LETTER_MAP)
+        mask, _ = parse_residue_constraints(spec, 5, CANONICAL, LETTER_MAP)
         cys_idx = CANONICAL.index("CYS")
         met_idx = CANONICAL.index("MET")
         trp_idx = CANONICAL.index("TRP")
@@ -278,9 +278,108 @@ class TestParseResidueConstraintsValid:
 
     def test_dtype_and_shape(self):
         spec = [{"position": 1, "allowed": "A"}]
-        mask = parse_residue_constraints(spec, 10, CANONICAL, LETTER_MAP)
+        mask, bias = parse_residue_constraints(spec, 10, CANONICAL, LETTER_MAP)
         assert mask.dtype == np.float32
         assert mask.shape == (10, 20)
+        assert bias.dtype == np.float32
+        assert bias.shape == (10, 20)
+
+    def test_hard_constraints_leave_soft_bias_empty(self):
+        spec = [
+            {"position": 1, "allowed": "A"},
+            {"position": "3..5", "disallowed": "CM"},
+        ]
+        _, bias = parse_residue_constraints(spec, 10, CANONICAL, LETTER_MAP)
+        assert np.all(bias == 0.0)
+
+
+# ============================================================================
+# parse_residue_constraints — soft constraints (weight)
+# ============================================================================
+
+class TestParseResidueConstraintsSoft:
+    """Tests for weighted (soft) residue constraints."""
+
+    def test_soft_disallowed_biases_without_blocking(self):
+        spec = [{"position": 3, "disallowed": "C", "weight": 2.0}]
+        mask, bias = parse_residue_constraints(spec, 5, CANONICAL, LETTER_MAP)
+        cys_idx = CANONICAL.index("CYS")
+        # Nothing is hard-blocked
+        assert np.all(mask == 0.0)
+        # CYS is discouraged at position 3 only
+        assert bias[2, cys_idx] == -2.0
+        assert bias[2].sum() == -2.0
+        assert np.all(bias[[0, 1, 3, 4]] == 0.0)
+
+    def test_soft_allowed_penalises_everything_else(self):
+        spec = [{"position": 1, "allowed": "AG", "weight": 1.5}]
+        mask, bias = parse_residue_constraints(spec, 3, CANONICAL, LETTER_MAP)
+        ala_idx = CANONICAL.index("ALA")
+        gly_idx = CANONICAL.index("GLY")
+        assert np.all(mask == 0.0)
+        assert bias[0, ala_idx] == 0.0
+        assert bias[0, gly_idx] == 0.0
+        # The other 18 amino acids are penalised
+        assert (bias[0] == -1.5).sum() == 18
+        assert np.all(bias[1:] == 0.0)
+
+    def test_soft_constraints_accumulate(self):
+        spec = [
+            {"position": 1, "disallowed": "C", "weight": 1.0},
+            {"position": 1, "disallowed": "C", "weight": 0.5},
+        ]
+        _, bias = parse_residue_constraints(spec, 3, CANONICAL, LETTER_MAP)
+        assert bias[0, CANONICAL.index("CYS")] == -1.5
+
+    def test_soft_range_positions(self):
+        spec = [{"position": "2..4", "disallowed": "M", "weight": 1.0}]
+        _, bias = parse_residue_constraints(spec, 6, CANONICAL, LETTER_MAP)
+        met_idx = CANONICAL.index("MET")
+        for pos in [1, 2, 3]:
+            assert bias[pos, met_idx] == -1.0
+        for pos in [0, 4, 5]:
+            assert bias[pos, met_idx] == 0.0
+
+    def test_hard_and_soft_coexist_at_same_position(self):
+        """A hard block and a soft preference on one position stay independent."""
+        spec = [
+            {"position": 1, "disallowed": "C"},  # hard
+            {"position": 1, "disallowed": "M", "weight": 2.0},  # soft
+        ]
+        mask, bias = parse_residue_constraints(spec, 3, CANONICAL, LETTER_MAP)
+        cys_idx = CANONICAL.index("CYS")
+        met_idx = CANONICAL.index("MET")
+        assert mask[0, cys_idx] == 1.0
+        assert mask[0, met_idx] == 0.0  # not hard-blocked
+        assert bias[0, met_idx] == -2.0
+        assert bias[0, cys_idx] == 0.0
+
+    def test_soft_never_blocks_all(self):
+        """Even penalising all 20 AAs leaves nothing hard-blocked."""
+        spec = [{"position": 1, "disallowed": "ACDEFGHIKLMNPQRSTVWY", "weight": 5.0}]
+        mask, bias = parse_residue_constraints(spec, 2, CANONICAL, LETTER_MAP)
+        assert np.all(mask == 0.0)
+        assert np.all(bias[0] == -5.0)
+
+    def test_weight_zero_raises(self):
+        spec = [{"position": 1, "disallowed": "C", "weight": 0}]
+        with pytest.raises(ValueError, match="must be positive"):
+            parse_residue_constraints(spec, 5, CANONICAL, LETTER_MAP)
+
+    def test_negative_weight_raises(self):
+        spec = [{"position": 1, "disallowed": "C", "weight": -1.0}]
+        with pytest.raises(ValueError, match="must be positive"):
+            parse_residue_constraints(spec, 5, CANONICAL, LETTER_MAP)
+
+    def test_non_finite_weight_raises(self):
+        spec = [{"position": 1, "disallowed": "C", "weight": float("inf")}]
+        with pytest.raises(ValueError, match="must be finite"):
+            parse_residue_constraints(spec, 5, CANONICAL, LETTER_MAP)
+
+    def test_non_numeric_weight_raises(self):
+        spec = [{"position": 1, "disallowed": "C", "weight": "strong"}]
+        with pytest.raises(ValueError, match="must be a number"):
+            parse_residue_constraints(spec, 5, CANONICAL, LETTER_MAP)
 
 
 # ============================================================================
@@ -347,7 +446,7 @@ class TestOriginalTestCase:
             {"position": 8, "allowed": "AGS"},
             {"position": 10, "allowed": "P"},
         ]
-        mask = parse_residue_constraints(spec, 10, CANONICAL, LETTER_MAP)
+        mask, _ = parse_residue_constraints(spec, 10, CANONICAL, LETTER_MAP)
 
         ala_idx = CANONICAL.index("ALA")
         cys_idx = CANONICAL.index("CYS")

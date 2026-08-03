@@ -707,6 +707,12 @@ def process_token_features(  # noqa: C901, PLR0915, PLR0912
     else:
         # Default: no constraints (all zeros = all AAs allowed)
         aa_constraint_mask = torch.zeros(len(token_data), len(const.canonical_tokens))
+    # Per-residue soft amino acid logit bias (shape: num_tokens x 20)
+    if "aa_soft_bias" in token_data.dtype.names:
+        aa_soft_bias = from_numpy(token_data["aa_soft_bias"]).float()
+    else:
+        # Default: no bias (all zeros = neutral)
+        aa_soft_bias = torch.zeros(len(token_data), len(const.canonical_tokens))
     res_type = one_hot(res_type, num_classes=const.num_tokens)
     modified = from_numpy(token_data["modified"]).long()
     ccd = from_numpy(token_data["ccd"]).long()
@@ -871,6 +877,7 @@ def process_token_features(  # noqa: C901, PLR0915, PLR0912
             is_standard = pad_dim(is_standard, 0, pad_len)
             design = pad_dim(design, 0, pad_len)
             aa_constraint_mask = pad_dim(aa_constraint_mask, 0, pad_len)
+            aa_soft_bias = pad_dim(aa_soft_bias, 0, pad_len)
             binding_type = pad_dim(binding_type, 0, pad_len)
             structure_group = pad_dim(structure_group, 0, pad_len)
             pad_mask = pad_dim(pad_mask, 0, pad_len)
@@ -909,6 +916,7 @@ def process_token_features(  # noqa: C901, PLR0915, PLR0912
         "is_standard": is_standard,
         "design_mask": design,
         "aa_constraint_mask": aa_constraint_mask,
+        "aa_soft_bias": aa_soft_bias,
         "binding_type": binding_type,
         "structure_group": structure_group,
         "token_bonds": bonds,

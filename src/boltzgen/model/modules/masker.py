@@ -91,6 +91,8 @@ class BoltzMasker(Module):
             # Per-residue amino acid constraints for inverse folding
             if "aa_constraint_mask" in clone:
                 new["aa_constraint_mask"] = clone["aa_constraint_mask"]
+            if "aa_soft_bias" in clone:
+                new["aa_soft_bias"] = clone["aa_soft_bias"]
             new["structure_group"] = clone["structure_group"]
             new["cyclic"] = clone["cyclic"]
             new["modified"] = clone["modified"]

@@ -202,6 +202,32 @@ entities:
     not_binding: 9..11    # Residues 9-11 are non-binding
   ```
 
+**Per-position amino acid constraints (optional):**
+
+Restrict which amino acids the inverse folding step may place at individual
+designed positions. Entries are hard (strictly enforced) unless they carry a
+positive `weight`, which makes them a soft preference of that strength in
+log-odds of the sampled distribution:
+
+```yaml
+entities:
+  - protein:
+      id: G
+      sequence: 60
+      residue_constraints:
+        - position: 10            # single position, 1-indexed
+          allowed: H              # hard: must be histidine
+        - position: 20..28        # range
+          disallowed: C           # hard: never cysteine
+        - position: 30..45
+          allowed: AGS            # soft: prefer small residues...
+          weight: 1.0             # ...but others remain possible
+```
+
+Overlapping hard constraints intersect, overlapping soft constraints add up,
+and hard constraints take precedence over soft ones. See the
+`residue_constraints` section of the top-level `README.md` for details.
+
 #### Ligands
 
 Define small molecule ligands using CCD codes or SMILES:
@@ -373,6 +399,7 @@ Here is a comprehensive list of all the keys from your YAML file with explanatio
 * `sequence`: Defines the amino acid sequence of the protein. This can include numbers to specify lengths of residues to be designed.
 * `secondary_structure`: Specifies the secondary structure of the protein.
 * `binding_types`: Defines which residues are involved in binding. Can be a string or a more detailed dictionary.
+* `residue_constraints`: Restricts which amino acids may be placed at individual designed positions during inverse folding. A list of entries with a `position` and either `allowed` or `disallowed`, optionally softened with a `weight`.
 * `cyclic`: A boolean (`true` or `false`) indicating if the protein is cyclic.
 
 ---

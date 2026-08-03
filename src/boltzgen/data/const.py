@@ -3529,6 +3529,7 @@ token_features = [
     "is_standard",
     "design_mask",
     "aa_constraint_mask",
+    "aa_soft_bias",
     "binding_type",
     "structure_group",
     "token_bonds",

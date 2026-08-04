@@ -835,24 +835,70 @@ def _apply_residue_constraint(
                     soft_bias[pos, idx] -= weight
 
 
-def _parse_constraint_weight(weight: object, position_spec: object) -> float:
+def _parse_constraint_weight(weight: object, label: str) -> float:
     """Validate a soft-constraint ``weight`` and return it as a float."""
     if isinstance(weight, bool) or not isinstance(weight, (int, float)):
-        raise ValueError(
-            f"Position {position_spec}: 'weight' must be a number, got {weight!r}"
-        )
+        raise ValueError(f"{label}: 'weight' must be a number, got {weight!r}")
     weight = float(weight)
     if not np.isfinite(weight):
         raise ValueError(
-            f"Position {position_spec}: 'weight' must be finite. "
+            f"{label}: 'weight' must be finite. "
             f"Omit 'weight' to make the constraint hard."
         )
     if weight <= 0:
         raise ValueError(
-            f"Position {position_spec}: 'weight' must be positive, got {weight}. "
+            f"{label}: 'weight' must be positive, got {weight}. "
             f"Omit 'weight' to make the constraint hard."
         )
     return weight
+
+
+def _parse_aa_constraint_spec(
+    spec: dict,
+    canonical_tokens: list[str],
+    prot_letter_to_token: dict[str, str],
+    label: str,
+) -> tuple[list[int], bool, Optional[float]]:
+    """Parse the amino-acid part of one residue constraint entry.
+
+    Shared by `protein` entities (which address positions with ``position``) and
+    `file` entities (which address them with ``chain``/``res_index``), so both
+    accept exactly the same amino acid, ``allowed``/``disallowed`` and ``weight``
+    semantics.
+
+    Returns
+    -------
+    tuple[list[int], bool, Optional[float]]
+        The canonical amino acid indices the entry refers to, whether the entry
+        is a whitelist (``allowed``) rather than a blacklist (``disallowed``),
+        and the soft weight (None for a hard constraint).
+    """
+    allowed = spec.get("allowed", None)
+    disallowed = spec.get("disallowed", None)
+
+    # Validate: cannot have both allowed and disallowed
+    if allowed is not None and disallowed is not None:
+        raise ValueError(f"{label}: cannot specify both 'allowed' and 'disallowed'")
+
+    if allowed is None and disallowed is None:
+        raise ValueError(f"{label}: must specify either 'allowed' or 'disallowed'")
+
+    # A constraint without a weight is hard; a positive weight makes it a
+    # soft preference of that strength (in logits).
+    weight = spec.get("weight", None)
+    if weight is not None:
+        weight = _parse_constraint_weight(weight, label)
+
+    # Normalize input: supports both "CM" (string) and [C, M] (list)
+    is_whitelist = allowed is not None
+    aa_list = _normalize_aa_spec(allowed if is_whitelist else disallowed)
+    if is_whitelist and len(aa_list) == 0:
+        raise ValueError(f"{label}: 'allowed' cannot be empty")
+    aa_indices = _convert_aa_names_to_indices(
+        aa_list, canonical_tokens, prot_letter_to_token
+    )
+
+    return aa_indices, is_whitelist, weight
 
 
 def parse_residue_constraints(
@@ -923,32 +969,11 @@ def parse_residue_constraints(
                 )
 
         # Parse amino acid specification
-        allowed = constraint.get("allowed", None)
-        disallowed = constraint.get("disallowed", None)
-
-        # Validate: cannot have both allowed and disallowed
-        if allowed is not None and disallowed is not None:
-            raise ValueError(
-                f"Position {position_spec}: cannot specify both 'allowed' and 'disallowed'"
-            )
-
-        if allowed is None and disallowed is None:
-            raise ValueError(
-                f"Position {position_spec}: must specify either 'allowed' or 'disallowed'"
-            )
-
-        # A constraint without a weight is hard; a positive weight makes it a
-        # soft preference of that strength (in logits).
-        weight = constraint.get("weight", None)
-        if weight is not None:
-            weight = _parse_constraint_weight(weight, position_spec)
-
-        # Normalize input: supports both "CM" (string) and [C, M] (list)
-        aa_list = _normalize_aa_spec(allowed if allowed is not None else disallowed)
-        if allowed is not None and len(aa_list) == 0:
-            raise ValueError(f"Position {position_spec}: 'allowed' cannot be empty")
-        aa_indices = _convert_aa_names_to_indices(
-            aa_list, canonical_tokens, prot_letter_to_token
+        aa_indices, is_whitelist, weight = _parse_aa_constraint_spec(
+            constraint,
+            canonical_tokens,
+            prot_letter_to_token,
+            label=f"Position {position_spec}",
         )
 
         _apply_residue_constraint(
@@ -956,7 +981,98 @@ def parse_residue_constraints(
             soft_bias=soft_bias,
             positions=positions,
             aa_indices=aa_indices,
-            is_whitelist=allowed is not None,
+            is_whitelist=is_whitelist,
+            weight=weight,
+        )
+
+    return constraint_mask, soft_bias
+
+
+def parse_file_residue_constraints(
+    constraints_spec: list,
+    structure: Structure,
+    num_res: int,
+    canonical_tokens: list[str],
+    prot_letter_to_token: dict[str, str],
+    path: object = "",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Parse the residue_constraints of a `file` entity.
+
+    A file entity spans several chains and its residue indices come from the
+    file, so positions are addressed per chain with ``chain: {id, res_index}``
+    (the same convention as ``binding_types`` and ``secondary_structure``)
+    rather than with the ``position`` key used for `protein` entities. Omitting
+    ``res_index`` (or setting it to "all") covers the whole chain.
+
+    Parameters
+    ----------
+    constraints_spec : list
+        List of constraint specifications from the file entity.
+    structure : Structure
+        The parsed structure of the file, used to resolve chain ids.
+    num_res : int
+        Number of residues in `structure`, before include masking.
+    canonical_tokens : list[str]
+        List of canonical 3-letter amino acid codes (20 AAs)
+    prot_letter_to_token : dict[str, str]
+        Mapping from 1-letter to 3-letter codes
+    path : object
+        Path of the file, only used in error messages.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        The hard constraint mask and the soft bias, each of shape
+        (num_res, 20). See :func:`parse_residue_constraints` for their
+        semantics, which are identical for both entity types.
+    """
+    num_aa = len(canonical_tokens)
+    constraint_mask = np.zeros((num_res, num_aa), dtype=np.float32)
+    soft_bias = np.zeros((num_res, num_aa), dtype=np.float32)
+
+    for list_element in constraints_spec:
+        chain = list_element["chain"]
+        if "id" not in chain:
+            msg = f"Misspecified chain in residue_constraints with missing 'id' for file with path {path}."
+            raise ValueError(msg)
+        chain_id = chain["id"]
+
+        if chain_id not in structure.chains["name"]:
+            msg = f"Specified chain id {chain_id} not in file {path}."
+            raise ValueError(msg)
+
+        data_chain = structure.chains[structure.chains["name"] == chain_id]
+        if data_chain["mol_type"].item() != const.chain_type_ids["PROTEIN"]:
+            msg = (
+                f"residue_constraints were specified for chain {chain_id} of file "
+                f"{path}, which is not a protein chain. Amino acid constraints only "
+                f"apply to protein chains."
+            )
+            raise ValueError(msg)
+
+        c_start = data_chain["res_idx"].item()
+        c_end = c_start + data_chain["res_num"].item()
+
+        # Set values
+        res_index = chain.get("res_index", None)
+        if res_index is None or res_index == "all":
+            positions = list(range(c_start, c_end))
+        else:
+            positions = parse_range(res_index, c_start, c_end)
+
+        aa_indices, is_whitelist, weight = _parse_aa_constraint_spec(
+            chain,
+            canonical_tokens,
+            prot_letter_to_token,
+            label=f"residue_constraints for chain {chain_id} in file {path}",
+        )
+
+        _apply_residue_constraint(
+            constraint_mask=constraint_mask,
+            soft_bias=soft_bias,
+            positions=positions,
+            aa_indices=aa_indices,
+            is_whitelist=is_whitelist,
             weight=weight,
         )
 
@@ -1724,6 +1840,8 @@ class YamlDesignParser:
                         new_design_mask,
                         fbind_types,
                         fss_type,
+                        faa_constraint_mask,
+                        faa_soft_bias,
                         file_chain_to_msa,
                         file_chain_symmetric_group,
                         fuse_info,
@@ -1755,10 +1873,8 @@ class YamlDesignParser:
                     res_design_mask = np.concatenate([res_design_mask, new_design_mask])
                     res_bind_type = np.concatenate([res_bind_type, fbind_types])
                     ss_type = np.concatenate([ss_type, fss_type])
-                    # File entities have no residue constraints — pad with zeros (all AAs allowed, no bias)
-                    file_no_constraints = np.zeros((len(new_design_mask), len(const.canonical_tokens)), dtype=np.float32)
-                    res_aa_constraint_mask = np.concatenate([res_aa_constraint_mask, file_no_constraints], axis=0)
-                    res_aa_soft_bias = np.concatenate([res_aa_soft_bias, file_no_constraints], axis=0)
+                    res_aa_constraint_mask = np.concatenate([res_aa_constraint_mask, faa_constraint_mask], axis=0)
+                    res_aa_soft_bias = np.concatenate([res_aa_soft_bias, faa_soft_bias], axis=0)
                     extra_mols.update(new_extra_mols)
                     if len(renaming) > 0:
                         msg = f"\nChain ids conflict with existing chain ids. Renaming with {renaming}. This is for the structure from '{path}'."
@@ -1974,6 +2090,7 @@ class YamlDesignParser:
         fuse = file.get("fuse", None)
         binding_types = file.get("binding_types", None)
         secondary_structure = file.get("secondary_structure", None)
+        residue_constraints = file.get("residue_constraints", None)
 
         if isinstance(include, list):
             for list_element in include:
@@ -2351,6 +2468,24 @@ class YamlDesignParser:
                         indices = parse_range(sheet, c_start, c_end)
                         fss_type[indices] = const.ss_type_ids["SHEET"]
 
+        # Get the file's per-residue amino acid constraints for inverse folding
+        if residue_constraints is not None:
+            faa_constraint_mask, faa_soft_bias = parse_file_residue_constraints(
+                residue_constraints,
+                structure=structure,
+                num_res=num_res,
+                canonical_tokens=const.canonical_tokens,
+                prot_letter_to_token=const.prot_letter_to_token,
+                path=path,
+            )
+        else:
+            faa_constraint_mask = np.zeros(
+                (num_res, len(const.canonical_tokens)), dtype=np.float32
+            )
+            faa_soft_bias = np.zeros(
+                (num_res, len(const.canonical_tokens)), dtype=np.float32
+            )
+
         # Parse and apply design insertions
         # First pass: collect insertions and coordinate lengths for symmetric chains
         if design_insertions is not None:
@@ -2424,6 +2559,22 @@ class YamlDesignParser:
                     res_insert_idx,
                     np.ones(num_residues) * const.ss_type_ids[ss_insert_type],
                 )
+                # Inserted residues are unconstrained (all amino acids allowed)
+                inserted_no_constraints = np.zeros(
+                    (num_residues, len(const.canonical_tokens)), dtype=np.float32
+                )
+                faa_constraint_mask = np.insert(
+                    faa_constraint_mask,
+                    res_insert_idx,
+                    inserted_no_constraints,
+                    axis=0,
+                )
+                faa_soft_bias = np.insert(
+                    faa_soft_bias,
+                    res_insert_idx,
+                    inserted_no_constraints,
+                    axis=0,
+                )
 
         # Apply mask to new structure groups. Update structure_groups by concatenating existing and new one
         new_groups = new_groups[include_mask].astype(np.int32)
@@ -2436,6 +2587,18 @@ class YamlDesignParser:
 
         # Apply mask to new ss_type. Update ss_type by concatenating existing and new one.
         fss_type = fss_type[include_mask].astype(np.int32)
+
+        # Apply mask to the per-residue amino acid constraints.
+        faa_constraint_mask = faa_constraint_mask[include_mask]
+        faa_soft_bias = faa_soft_bias[include_mask]
+
+        misaligned = (
+            f"Residue constraints of file {path} are misaligned with its design mask "
+            f"({len(faa_constraint_mask)}/{len(faa_soft_bias)} vs "
+            f"{len(new_design_mask)} residues). This is a bug in the code."
+        )
+        assert len(faa_constraint_mask) == len(new_design_mask), misaligned
+        assert len(faa_soft_bias) == len(new_design_mask), misaligned
 
         # Apply mask to structrue
         if not all(include_mask):
@@ -2521,6 +2684,8 @@ class YamlDesignParser:
             new_design_mask,
             fbind_types,
             fss_type,
+            faa_constraint_mask,
+            faa_soft_bias,
             file_chain_to_msa,
             file_chain_symmetric_group,
             fuse_info,

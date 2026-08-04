@@ -65,6 +65,20 @@ entities:
             id: A
             res_index: ..4,20..27
 
+      # Constrain which amino acids may be placed at redesigned residues of the
+      # loaded chain. Positions are addressed per chain with 'res_index'
+      # (like binding_types), not with 'position'.
+      residue_constraints:
+        - chain:
+            id: A
+            res_index: ..4
+            disallowed: C # No Cysteine in the first four redesigned residues
+        - chain:
+            id: A
+            res_index: 20..27
+            allowed: AGS
+            weight: 1.0 # Soft: prefer small residues here, others still possible
+
       secondary_structure:
         - chain:
             id: A

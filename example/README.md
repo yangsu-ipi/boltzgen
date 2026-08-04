@@ -228,6 +228,28 @@ Overlapping hard constraints intersect, overlapping soft constraints add up,
 and hard constraints take precedence over soft ones. See the
 `residue_constraints` section of the top-level `README.md` for details.
 
+For chains loaded from a structure file, use the same `chain`/`res_index`
+addressing as `binding_types` instead of `position` (omit `res_index` to cover
+the whole chain):
+
+```yaml
+entities:
+  - file:
+      path: 8r3a.cif
+      design:
+        - chain: {id: A, res_index: 14..19}
+      residue_constraints:
+        - chain:
+            id: A
+            res_index: 15
+            allowed: H          # hard
+        - chain:
+            id: A
+            res_index: 16..19
+            disallowed: C
+            weight: 1.0         # soft
+```
+
 #### Ligands
 
 Define small molecule ligands using CCD codes or SMILES:
@@ -399,7 +421,7 @@ Here is a comprehensive list of all the keys from your YAML file with explanatio
 * `sequence`: Defines the amino acid sequence of the protein. This can include numbers to specify lengths of residues to be designed.
 * `secondary_structure`: Specifies the secondary structure of the protein.
 * `binding_types`: Defines which residues are involved in binding. Can be a string or a more detailed dictionary.
-* `residue_constraints`: Restricts which amino acids may be placed at individual designed positions during inverse folding. A list of entries with a `position` and either `allowed` or `disallowed`, optionally softened with a `weight`.
+* `residue_constraints`: Restricts which amino acids may be placed at individual designed positions during inverse folding. A list of entries with a `position` and either `allowed` or `disallowed`, optionally softened with a `weight`. Also available for `file` entities, where positions are addressed with `chain`/`res_index`.
 * `cyclic`: A boolean (`true` or `false`) indicating if the protein is cyclic.
 
 ---
@@ -425,6 +447,7 @@ Here is a comprehensive list of all the keys from your YAML file with explanatio
 * `structure_groups`: Defines groups of residues for visualization or other purposes.
 * `design`: Specifies which residues in the included chains are designable.
 * `secondary_structure`: Defines the secondary structure for specific residues within included chains.
+* `residue_constraints`: Restricts which amino acids inverse folding may place at redesigned residues of the included protein chains. Addressed per chain with `chain`/`res_index`; entries take either `allowed` or `disallowed`, optionally softened with a `weight`.
 * `design_insertions`: Specifies where to insert new designable residues.
 
 ---

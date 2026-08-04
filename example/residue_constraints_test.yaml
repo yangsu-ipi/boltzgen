@@ -53,3 +53,35 @@ entities:
         - position: 14
           disallowed: M
           weight: 1.5
+
+  # Constraints also work for chains loaded from a structure file. There,
+  # positions are addressed per chain with 'res_index' (the same convention as
+  # binding_types), not with 'position'. Omitting 'res_index' covers the whole
+  # chain.
+  - file:
+      path: 7rpz.cif
+      include:
+        - chain:
+            id: A
+
+      # Redesign a stretch of the loaded chain...
+      design:
+        - chain:
+            id: A
+            res_index: 20..27
+
+      # ...and restrict what may be placed there
+      residue_constraints:
+        - chain:
+            id: A
+            res_index: 20..27
+            disallowed: C # Hard: never Cysteine in the redesigned stretch
+        - chain:
+            id: A
+            res_index: 24
+            allowed: H # Hard: this one position must be Histidine
+        - chain:
+            id: A
+            res_index: 25..27
+            allowed: AGS
+            weight: 1.0 # Soft: prefer small residues, but allow others

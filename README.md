@@ -352,6 +352,46 @@ entities:
           weight: 2.0
 ```
 
+The same works for chains loaded from a structure file. Because a `file` entity
+spans several chains and its residue indices come from the file, positions are
+addressed per chain with `res_index` — the same convention as `binding_types`
+and `secondary_structure` — instead of with `position`:
+
+```yaml
+entities:
+  - file:
+      path: 8r3a.cif
+      include:
+        - chain:
+            id: A
+
+      # Redesign part of the loaded chain...
+      design:
+        - chain:
+            id: A
+            res_index: 14..19
+
+      # ...and restrict what may be placed there
+      residue_constraints:
+        - chain:
+            id: A
+            res_index: 14..19
+            disallowed: C       # hard, whole range
+        - chain:
+            id: A
+            res_index: 15
+            allowed: H          # hard, single position
+        - chain:
+            id: A
+            res_index: 16..19
+            allowed: AGS
+            weight: 1.0         # soft
+```
+
+Omitting `res_index` (or setting it to `"all"`) covers the whole chain. Only
+protein chains may be constrained; naming a DNA, RNA or ligand chain is an
+error.
+
 Notes:
 
 - `weight` is expressed in log-odds of the sampled distribution: a weight of
@@ -360,6 +400,9 @@ Notes:
   `0.5`–`1.0` nudge, values above `~4` are nearly hard in practice.
 - Constraints are applied during the inverse folding step, so they only take
   effect if inverse folding runs, and only at designed positions.
+- Constraints stay attached to the residues they name: residues added by
+  `design_insertions` are unconstrained, and constraints on residues dropped by
+  `include`/`include_proximity`/`exclude` drop out with them.
 - Overlapping hard constraints intersect (only amino acids allowed by all of
   them survive); overlapping soft constraints add up.
 - Hard constraints always win over soft ones at the same position, and the

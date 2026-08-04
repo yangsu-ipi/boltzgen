@@ -342,7 +342,39 @@ yaml_keys = [
     "position",
     "allowed",
     "disallowed",
+    "weight",
 ]
+
+
+def validate_yaml_keys(schema: dict) -> None:
+    """Check that a design specification only uses known keys.
+
+    Raises
+    ------
+    ValueError
+        If an unknown key is present, or a known key is misspelled in one of
+        the ways we see most often.
+    """
+    for name in ["res_idx", "residue_idx", "residue_index"]:
+        if name in str(schema):
+            raise ValueError(f"Found {name} in yaml. Did you mean 'res_index'?")
+
+    invalid_keys = set()
+
+    def recursive_check(data):
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if key not in yaml_keys:
+                    invalid_keys.add(key)
+                recursive_check(value)
+        elif isinstance(data, list):
+            for item in data:
+                recursive_check(item)
+
+    recursive_check(schema)
+    if len(invalid_keys) > 0:
+        msg = f"Found invalid keys in yaml file: {invalid_keys}.\nValid keys are: {yaml_keys}"
+        raise ValueError(msg)
 
 
 def parse_ccd_residue(
@@ -1405,26 +1437,7 @@ class YamlDesignParser:
         """
 
         # Check valididty of yaml file
-        for name in ["res_idx", "residue_idx", "residue_index"]:
-            if name in str(schema):
-                raise ValueError(f"Found {name} in yaml. Did you mean 'res_index'?")
-
-        invalid_keys = set()
-
-        def recursive_check(data):
-            if isinstance(data, dict):
-                for key, value in data.items():
-                    if key not in yaml_keys:
-                        invalid_keys.add(key)
-                    recursive_check(value)
-            elif isinstance(data, list):
-                for item in data:
-                    recursive_check(item)
-
-        recursive_check(schema)
-        if len(invalid_keys) > 0:
-            msg = f"Found invalid keys in yaml file: {invalid_keys}.\nValid keys are: {yaml_keys}"
-            raise ValueError(msg)
+        validate_yaml_keys(schema)
 
         # Disable rdkit warnings
         blocker = rdBase.BlockLogs()  # noqa: F841

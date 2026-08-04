@@ -4,15 +4,21 @@ Tests parse_residue_constraints(), _normalize_aa_spec(), and
 _convert_aa_names_to_indices() from boltzgen.data.parse.schema.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
+import yaml
 
 from boltzgen.data import const
 from boltzgen.data.parse.schema import (
     _convert_aa_names_to_indices,
     _normalize_aa_spec,
     parse_residue_constraints,
+    validate_yaml_keys,
 )
+
+EXAMPLE_DIR = Path(__file__).parent.parent / "example"
 
 # Shorthand fixtures
 CANONICAL = const.canonical_tokens  # 20 three-letter codes
@@ -478,3 +484,42 @@ class TestOriginalTestCase:
         # Unconstrained positions (2, 6, 7, 9 in 0-indexed) are all zeros
         for pos in [1, 5, 6, 8]:
             assert mask[pos].sum() == 0.0
+
+
+# ============================================================================
+# YAML key validation
+# ============================================================================
+
+class TestYamlKeyValidation:
+    """A design spec is rejected up front if it uses an unknown key."""
+
+    def test_soft_constraint_keys_are_accepted(self):
+        """Regression: 'weight' must be a known key or soft constraints are unusable."""
+        schema = {
+            "entities": [
+                {
+                    "protein": {
+                        "id": "A",
+                        "sequence": 10,
+                        "residue_constraints": [
+                            {"position": 1, "allowed": "A"},
+                            {"position": "3..5", "disallowed": "CM", "weight": 2.0},
+                        ],
+                    }
+                }
+            ]
+        }
+        validate_yaml_keys(schema)  # must not raise
+
+    def test_unknown_key_raises(self):
+        schema = {"entities": [{"protein": {"id": "A", "strength": 2.0}}]}
+        with pytest.raises(ValueError, match="invalid keys"):
+            validate_yaml_keys(schema)
+
+    @pytest.mark.parametrize(
+        "path",
+        sorted(EXAMPLE_DIR.rglob("*.yaml")),
+        ids=lambda p: str(p.relative_to(EXAMPLE_DIR)),
+    )
+    def test_example_specs_use_only_known_keys(self, path):
+        validate_yaml_keys(yaml.safe_load(path.read_text()))

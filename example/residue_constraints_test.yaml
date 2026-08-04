@@ -17,8 +17,10 @@
 #       so they cannot be verified from a single design.
 
 entities:
+  # Designed chain id is 'P' so it does not collide with chain 'A' of the
+  # structure file below (colliding ids are renamed automatically).
   - protein:
-      id: A
+      id: P
       sequence: 14
       residue_constraints:
         # Position 1: Force Alanine only
